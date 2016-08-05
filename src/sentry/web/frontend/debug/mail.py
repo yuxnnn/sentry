@@ -114,12 +114,15 @@ class ActivityMailDebugView(View):
 
 @login_required
 def new_event(request):
+    platform = request.GET.get('platform', None)
     random = get_random(request)
     generated_organization = generate_organization(random)
     generated_team = generated_organization.related[Team]()
     generated_project = generated_team.related[Project]()
     generated_group = generated_project.related[Group]()
-    generated_event = generated_group.related[Event]()  # TODO: Needs to support parameter passing!
+    generated_event = generated_group.related[Event](
+        platform=platform,
+    )
     generated_rule = generated_project.related[Rule]()
 
     interface_list = []

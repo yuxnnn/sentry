@@ -54,7 +54,10 @@ def make_culprit(random):
     )
 
 
-def generate_event(random, group, platform='python'):
+def generate_event(random, group, platform=None):
+    if platform is None:
+        platform = 'python'
+
     id = next(sequences[Event])
     event = Event(
         id=id,
