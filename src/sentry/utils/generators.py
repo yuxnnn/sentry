@@ -32,9 +32,18 @@ from sentry.utils.samples import load_data
 
 Result = namedtuple('Result', 'instance related')
 
-epoch = to_timestamp(datetime(2016, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
+class State(object):
+    def __init__(self, random, sequences=None):
+        if sequences is None:
+            sequences = defaultdict(
+                functools.partial(itertools.count, 1),
+            )
 
-sequences = defaultdict(functools.partial(itertools.count, 1))
+        self.random = random
+        self.sequences = sequences
+
+
+epoch = to_timestamp(datetime(2016, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
 
 
 def make_message(random, length=None):
@@ -54,20 +63,20 @@ def make_culprit(random):
     )
 
 
-def generate_event(random, group, platform=None):
+def generate_event(state, group, platform=None):
     if platform is None:
         platform = 'python'
 
-    id = next(sequences[Event])
+    id = next(state.sequences[Event])
     event = Event(
         id=id,
         group=group,
         project=group.project,
         event_id=uuid.UUID(int=id),
-        message=make_message(random),
+        message=make_message(state.random),
         data=load_data(platform),
         datetime=to_datetime(
-            random.randint(
+            state.random.randint(
                 to_timestamp(group.first_seen),
                 to_timestamp(group.last_seen),
             ),
@@ -88,57 +97,57 @@ def make_group_metadata(random, group):
     }
 
 
-def generate_group(random, project):
-    first_seen = epoch + random.randint(0, 60 * 60 * 24 * 30)
-    last_seen = random.randint(
+def generate_group(state, project):
+    first_seen = epoch + state.random.randint(0, 60 * 60 * 24 * 30)
+    last_seen = state.random.randint(
         first_seen,
         first_seen + (60 * 60 * 24 * 30)
     )
 
     group = Group(
-        id=next(sequences[Group]),
+        id=next(state.sequences[Group]),
         project=project,
-        culprit=make_culprit(random),
-        level=random.choice(LOG_LEVELS.keys()),
-        message=make_message(random),
+        culprit=make_culprit(state.random),
+        level=state.random.choice(LOG_LEVELS.keys()),
+        message=make_message(state.random),
         first_seen=to_datetime(first_seen),
         last_seen=to_datetime(last_seen),
-        status=random.choice((
+        status=state.random.choice((
             GroupStatus.UNRESOLVED,
             GroupStatus.RESOLVED,
         )),
     )
 
-    if random.random() < 0.8:
-        group.data = make_group_metadata(random, group)
+    if state.random.random() < 0.8:
+        group.data = make_group_metadata(state.random, group)
 
     return Result(group, {
         Event: functools.partial(
             generate_event,
-            random,
+            state,
             group,
         )
     })
 
 
-def generate_rule(random, project):
+def generate_rule(state, project):
     return Result(
         Rule(
-            id=next(sequences[Rule]),
+            id=next(state.sequences[Rule]),
             project=project,
             label=' '.join(
-                random.choice(WORDS) for _ in xrange(random.randint(3, 10))
+                state.random.choice(WORDS) for _ in xrange(state.random.randint(3, 10))
             ).title()
         ), {}
     )
 
 
-def generate_project(random, team):
-    id = next(sequences[Project])
+def generate_project(state, team):
+    id = next(state.sequences[Project])
     project = Project(
         id=id,
         name=' '.join(
-            random.choice(WORDS) for _ in xrange(random.randint(1, 3))
+            state.random.choice(WORDS) for _ in xrange(state.random.randint(1, 3))
         ).title(),
         organization=team.organization,
         team=team,
@@ -147,23 +156,23 @@ def generate_project(random, team):
     return Result(project, {
         Group: functools.partial(
             generate_group,
-            random,
+            state,
             project,
         ),
         Rule: functools.partial(
             generate_rule,
-            random,
+            state,
             project,
         ),
     })
 
 
-def generate_team(random, organization):
-    id = next(sequences[Team])
+def generate_team(state, organization):
+    id = next(state.sequences[Team])
     team = Team(
         id=id,
         name=' '.join(
-            random.choice(WORDS) for _ in xrange(random.randint(1, 3))
+            state.random.choice(WORDS) for _ in xrange(state.random.randint(1, 3))
         ),
         slug='team-{}'.format(id),
         organization=organization,
@@ -171,20 +180,20 @@ def generate_team(random, organization):
     return Result(team, {
         Project: functools.partial(
             generate_project,
-            random,
+            state,
             team,
         ),
     })
 
 
-def generate_organization_member(random, organization):
+def generate_organization_member(state, organization):
     return Result(
         OrganizationMember(
-            id=next(sequences[OrganizationMember]),
+            id=next(state.sequences[OrganizationMember]),
             email='{}@{}.{}'.format(
-                random.choice(WORDS),
-                random.choice(WORDS),
-                random.choice(('com', 'net', 'org')),
+                state.random.choice(WORDS),
+                state.random.choice(WORDS),
+                state.random.choice(('com', 'net', 'org')),
             ),
             organization=organization,
         ),
@@ -192,24 +201,24 @@ def generate_organization_member(random, organization):
     )
 
 
-def generate_organization(random):
-    id = next(sequences[Organization])
+def generate_organization(state):
+    id = next(state.sequences[Organization])
     organization = Organization(
         id=id,
         name=' '.join(
-            random.choice(WORDS) for _ in xrange(random.randint(1, 3))
+            state.random.choice(WORDS) for _ in xrange(state.random.randint(1, 3))
         ).title(),
         slug='organization-{}'.format(id),
     )
     return Result(organization, {
         Team: functools.partial(
             generate_team,
-            random,
+            state,
             organization,
         ),
         OrganizationMember: functools.partial(
             generate_organization_member,
-            random,
+            state,
             organization,
         ),
     })

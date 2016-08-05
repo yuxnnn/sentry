@@ -30,16 +30,16 @@ from sentry.plugins.sentry_mail.activity import emails
 from sentry.utils.dates import to_timestamp
 from sentry.utils.email import inline_css
 from sentry.utils.http import absolute_uri
-from sentry.utils.generators import generate_organization
+from sentry.utils.generators import State, generate_organization
 from sentry.web.decorators import login_required
 from sentry.web.helpers import render_to_response, render_to_string
 
 logger = logging.getLogger(__name__)
 
 
-def get_random(request):
+def get_generator_state(request):
     seed = request.GET.get('seed', six.text_type(time.time()))
-    return Random(seed)
+    return State(Random(seed))
 
 
 # TODO(dcramer): use https://github.com/disqus/django-mailviews
@@ -90,8 +90,8 @@ class ActivityMailPreview(object):
 
 class ActivityMailDebugView(View):
     def get(self, request):
-        random = get_random(request)
-        generated_organization = generate_organization(random)
+        state = get_generator_state(request)
+        generated_organization = generate_organization(state)
         generated_team = generated_organization.related[Team]()
         generated_project = generated_team.related[Project]()
         generated_group = generated_project.related[Group]()
@@ -115,8 +115,8 @@ class ActivityMailDebugView(View):
 @login_required
 def new_event(request):
     platform = request.GET.get('platform', None)
-    random = get_random(request)
-    generated_organization = generate_organization(random)
+    state = get_generator_state(request)
+    generated_organization = generate_organization(state)
     generated_team = generated_organization.related[Team]()
     generated_project = generated_team.related[Project]()
     generated_group = generated_project.related[Group]()
@@ -155,8 +155,8 @@ def new_event(request):
 
 @login_required
 def digest(request):
-    random = get_random(request)
-    generated_organization = generate_organization(random)
+    state = get_generator_state(request)
+    generated_organization = generate_organization(state)
     generated_team = generated_organization.related[Team]()
     generated_project = generated_team.related[Project]()
     rules = [generated_project.related[Rule]().instance for _ in range(random.randint(1, 4))]
@@ -209,8 +209,8 @@ def digest(request):
 
 @login_required
 def request_access(request):
-    random = get_random(request)
-    generated_organization = generate_organization(random)
+    state = get_generator_state(request)
+    generated_organization = generate_organization(state)
     generated_team = generated_organization.related[Team]()
     return MailPreview(
         html_template='sentry/emails/request-team-access.html',
@@ -229,8 +229,8 @@ def request_access(request):
 
 @login_required
 def invitation(request):
-    random = get_random(request)
-    generated_organization = generate_organization(random)
+    state = get_generator_state(request)
+    generated_organization = generate_organization(state)
     generated_organization_member = generated_organization.related[OrganizationMember]()
     return MailPreview(
         html_template='sentry/emails/member-invite.html',
@@ -248,8 +248,8 @@ def invitation(request):
 
 @login_required
 def access_approved(request):
-    random = get_random(request)
-    generated_organization = generate_organization(random)
+    state = get_generator_state(request)
+    generated_organization = generate_organization(state)
     generated_team = generated_organization.related[Team]()
     return MailPreview(
         html_template='sentry/emails/access-approved.html',
