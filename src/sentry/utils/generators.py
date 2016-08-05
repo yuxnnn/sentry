@@ -63,7 +63,7 @@ def generate_event(random, group, platform=None):
         id=id,
         group=group,
         project=group.project,
-        event_id=uuid.uuid1(0, id).hex,
+        event_id=uuid.UUID(int=id),
         message=make_message(random),
         data=load_data(platform),
         datetime=to_datetime(
