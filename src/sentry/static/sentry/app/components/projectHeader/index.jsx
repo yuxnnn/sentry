@@ -53,9 +53,9 @@ const ProjectHeader = React.createClass({
                 </li>
                 {access.has('project:write') &&
                   <li className={navSection == 'settings' ? 'active' : ''}>
-                    <a href={`/${org.slug}/${project.slug}/settings/`}>
+                    <Link to={`/${org.slug}/${project.slug}/settings/`}>
                       {t('Settings')}
-                    </a>
+                    </Link>
                   </li>
                 }
               </ul>

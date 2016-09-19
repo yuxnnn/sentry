@@ -16,6 +16,7 @@ from django.db import models
 from django.db.models import F
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
+from uuid import uuid1
 
 from sentry.app import locks
 from sentry.db.models import (
@@ -279,3 +280,118 @@ class Project(Model):
                 user, None, 'workflow:notifications',
                 UserOptionValue.all_conversations)
         return opt_value == UserOptionValue.all_conversations
+
+    def get_security_token(self):
+        # TODO(dcramer): this update should happen within a lock
+        security_token = self.get_option('sentry:token', None)
+        if security_token is None:
+
+            lock = locks.get('sentry:token', duration=5)
+            with lock.acquire():
+                security_token = self.get_option('sentry:token', None)
+                if security_token is None:
+                    security_token = uuid1().hex
+                    self.update_option('sentry:token', security_token)
+        return security_token
+
+    def get_config(self):
+        """
+        Return a list of configuration built-in values for the project.
+
+        These are defined per the same spec as ``Plugin2.get_config()``.
+        """
+        return [{
+            'name': 'mail:subject_prefix',
+            'type': 'string',
+            'label': 'Subject prefix',
+            'help': 'Choose a custom prefix for emails from this project.',
+            'required': False,
+        }, {
+            'name': 'sentry:default_environment',
+            'type': 'string',
+            'label': 'Default environment',
+            'placeholder': 'e.g. production',
+            'help': 'The default selected environment when viewing issues.',
+            'required': False,
+        }, {
+            'name': 'sentry:resolve_age',
+            'type': 'range',
+            'label': 'Auto resolve',
+            'help': 'Automatically resolve an issue if it hasn\'t been seen for this amount of time.',
+            'min': 0,
+            'max': 168,
+            'step': 1,
+            'allowedValues': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 21, 24, 30, 36, 48, 72, 96, 120, 144, 168],
+            # formatLabel: (val) => {
+            #   val = parseInt(val, 10);
+            #   if (val === 0) {
+            #       return 'Disabled';
+            #   } else if (val > 23 && val % 24 === 0) {
+            #       val = (val / 24);
+            #       return val + ' day' + (val != 1 ? 's' : '');
+            #   }
+            #   return val + ' hour' + (val != 1 ? 's' : '');
+            # },
+            'required': False,
+        }, {
+            'name': 'sentry:scrub_data',
+            'type': 'boolean',
+            'label': 'Data scrubber',
+            'help': 'Enable server-side data scrubbing.',
+            'required': False,
+        }, {
+            'name': 'sentry:scrub_defaults',
+            'type': 'boolean',
+            'label': 'Use default scrubbers',
+            'help': 'Apply default scrubbers to prevent things like passwords and credit cards from being stored.',
+            'required': False,
+        }, {
+            'name': 'sentry:sensitive_fields',
+            'type': 'textarea',
+            'label': 'Additional sensitive fields',
+            'help': 'Additional field names to match against when scrubbing data. Separate multiple entries with a newline.',
+            'placeholder': 'e.g. email',
+            'required': False,
+        }, {
+            'name': 'sentry:safe_fields',
+            'type': 'textarea',
+            'label': 'Safe fields',
+            'help': 'Field names which data scrubbers should ignore. Separate multiple entries with a newline.',
+            'placeholder': 'e.g. email',
+            'required': False,
+        }, {
+            'name': 'sentry:scrub_ip_address',
+            'type': 'boolean',
+            'label': 'Don\'t store IP Addresses',
+            'help': 'Prevent IP addresses from being stored for new events.',
+            'placeholder': 'e.g. email',
+            'required': False,
+        }, {
+            'name': 'sentry:origins',
+            'type': 'textarea',
+            'label': 'Allowed domains',
+            'help': 'Separate multiple entries with a newline.',
+            'placeholder': 'e.g. https://example.com',
+            'required': False,
+        }, {
+            'name': 'sentry:blacklisted_ips',
+            'type': 'textarea',
+            'label': 'Filtered IP addresses',
+            'help': 'Separate multiple entries with a newline.',
+            'placeholder': 'e.g. 127.0.0.1 or 192.168.0.1/24',
+            'required': False,
+        }, {
+            'name': 'sentry:scrape_javascript',
+            'type': 'boolean',
+            'label': 'Enable JavaScript source fetching',
+            'help': 'Allow Sentry to scrape missing JavaScript source context when possible.',
+            'required': False,
+        }, {
+            'name': 'sentry:csp_ignored_sources',
+            'type': 'textarea',
+            'required': False,
+        }, {
+            'name': 'sentry:csp_ignored_sources_defaults',
+            'type': 'boolean',
+            'required': False,
+        }]

@@ -1,23 +1,25 @@
 from __future__ import absolute_import
 
 import logging
-from uuid import uuid4
+import six
 
 from datetime import timedelta
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.response import Response
+from uuid import uuid4
 
 from sentry.api.base import DocSection
 from sentry.api.bases.project import ProjectEndpoint, ProjectPermission
 from sentry.api.decorators import sudo_required
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.plugin import PluginSerializer
+from sentry.api.serializers.rest_framework import DictField
 from sentry.app import digests
 from sentry.models import (
-    AuditLogEntryEvent, Group, GroupStatus, Project, ProjectBookmark,
-    ProjectStatus, UserOption
+    AuditLogEntryEvent, Group, GroupStatus, OrganizationMemberTeam, Project,
+    ProjectBookmark, ProjectStatus, Team, UserOption
 )
 from sentry.plugins import plugins
 from sentry.tasks.deletion import delete_project
@@ -83,10 +85,65 @@ class ProjectAdminSerializer(serializers.Serializer):
     slug = serializers.RegexField(r'^[a-z0-9_\-]+$', max_length=50)
     digestsMinDelay = serializers.IntegerField(min_value=60, max_value=3600)
     digestsMaxDelay = serializers.IntegerField(min_value=60, max_value=3600)
+    team = serializers.RegexField(r'^[a-z0-9_\-]+$', max_length=50)
+    securityToken = serializers.RegexField(r'^[a-z0-9_\-]+$', max_length=64,
+                                           required=False)
+    options = DictField(required=False)
 
     def validate_digestsMaxDelay(self, attrs, source):
         if attrs[source] < attrs['digestsMinDelay']:
             raise serializers.ValidationError('The maximum delay on digests must be higher than the minimum.')
+        return attrs
+
+    def validate_options(self, attrs, source):
+        from sentry.plugins.validators import DEFAULT_VALIDATORS
+
+        project = self.context['project']
+        request = self.context['request']
+
+        config_by_field = {f['name']: f for f in project.get_config()}
+        for key, value in six.iteritems(attrs[source]):
+            config = config_by_field[key]
+
+            # TODO(dcramer): this logic is duplicated in PluginConfigMixin
+            for validator in DEFAULT_VALIDATORS.get(config['type'], ()):
+                value = validator(project=project, value=value, actor=request.user)
+
+            for validator in config.get('validators', ()):
+                value = validator(value, project=project, actor=request.user)
+            attrs[source][key] = value
+        return attrs
+
+    def validate_slug(self, attrs, source):
+        slug = attrs[source]
+        project = self.context['project']
+        other = Project.objects.filter(
+            slug=slug,
+            organization=project.organization,
+        ).exclude(id=project.id).first()
+        if other is not None:
+            raise serializers.ValidationError(
+                'Another project (%s) is already using that slug' % other.name
+            )
+        return attrs
+
+    def validate_team(self, attrs, source):
+        value = attrs[source]
+        request = self.context['request']
+        if isinstance(value, basestring):
+            try:
+                value = Team.objects.get(
+                    organization=self.context['project'].organization,
+                    slug=value,
+                )
+            except Team.DoesNotExist:
+                raise serializers.ValidationError('Invalid team.')
+        if request.user.is_authenticated()and not OrganizationMemberTeam.objects.filter(
+            organizationmember__user=request.user,
+            team=value,
+        ).exists():
+            raise serializers.ValidationError('Invalid team.')
+        attrs[source] = value
         return attrs
 
 
@@ -118,6 +175,23 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
 
         return queryset.count()
 
+    def _get_options(self, project):
+        return {
+            'sentry:origins': '\n'.join(project.get_option('sentry:origins', ['*']) or []),
+            'sentry:resolve_age': int(project.get_option('sentry:resolve_age', 0)),
+            'sentry:scrub_data': bool(project.get_option('sentry:scrub_data', True)),
+            'sentry:scrub_defaults': bool(project.get_option('sentry:scrub_defaults', True)),
+            'sentry:safe_fields': project.get_option('sentry:safe_fields', []),
+            'sentry:sensitive_fields': project.get_option('sentry:sensitive_fields', []),
+            'sentry:csp_ignored_sources_defaults': bool(project.get_option('sentry:csp_ignored_sources_defaults', True)),
+            'sentry:csp_ignored_sources': '\n'.join(project.get_option('sentry:csp_ignored_sources', []) or []),
+            'sentry:default_environment': project.get_option('sentry:default_environment'),
+            'mail:subject_prefix': project.get_option('mail:subject_prefix'),
+            'sentry:scrub_ip_address': project.get_option('sentry:scrub_ip_address', False),
+            'sentry:blacklisted_ips': '\n'.join(project.get_option('sentry:blacklisted_ips', [])),
+            'feedback:branding': project.get_option('feedback:branding', '1') == '1',
+        }
+
     @attach_scenarios([get_project_scenario])
     def get(self, request, project):
         """
@@ -132,26 +206,16 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
         :auth: required
         """
         data = serialize(project, request.user)
-        data['options'] = {
-            'sentry:origins': '\n'.join(project.get_option('sentry:origins', ['*']) or []),
-            'sentry:resolve_age': int(project.get_option('sentry:resolve_age', 0)),
-            'sentry:scrub_data': bool(project.get_option('sentry:scrub_data', True)),
-            'sentry:scrub_defaults': bool(project.get_option('sentry:scrub_defaults', True)),
-            'sentry:safe_fields': project.get_option('sentry:safe_fields', []),
-            'sentry:sensitive_fields': project.get_option('sentry:sensitive_fields', []),
-            'sentry:csp_ignored_sources_defaults': bool(project.get_option('sentry:csp_ignored_sources_defaults', True)),
-            'sentry:csp_ignored_sources': '\n'.join(project.get_option('sentry:csp_ignored_sources', []) or []),
-            'sentry:default_environment': project.get_option('sentry:default_environment'),
-            'feedback:branding': project.get_option('feedback:branding', '1') == '1',
-        }
+        data['options'] = self._get_options(project)
         data['plugins'] = serialize([
             plugin
             for plugin in plugins.configurable_for_project(project, version=None)
             if plugin.has_project_conf()
         ], request.user, PluginSerializer(project))
         data['team'] = serialize(project.team, request.user)
+        data['config'] = project.get_config()
         data['organization'] = serialize(project.organization, request.user)
-
+        data['securityToken'] = project.get_security_token()
         data.update({
             'digestsMinDelay': project.get_option(
                 'digests:mail:minimum_delay', digests.minimum_delay,
@@ -202,7 +266,14 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
         else:
             serializer_cls = ProjectMemberSerializer
 
-        serializer = serializer_cls(data=request.DATA, partial=True)
+        serializer = serializer_cls(
+            data=request.DATA,
+            partial=True,
+            context={
+                'project': project,
+                'request': request,
+            },
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
@@ -215,6 +286,10 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
 
         if result.get('name'):
             project.name = result['name']
+            changed = True
+
+        if result.get('team'):
+            project.team = result['team']
             changed = True
 
         if changed:
@@ -245,37 +320,81 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
         elif result.get('isSubscribed') is False:
             UserOption.objects.set_value(request.user, project, 'mail:alert', 0)
 
+        if result.get('securityToken'):
+            project.update_option('sentry:token', result['securityToken'])
+
+        # TODO(dcramer): rewrite options to use standard API config
         if has_project_write:
             options = request.DATA.get('options', {})
+            # config_by_name = {f['name']: f for f in project.get_config()}
+            # for key, value in six.iteritems(options):
+            #     if key in config_by_name:
+            #         project.update_option(key, value)
             if 'sentry:origins' in options:
                 project.update_option(
                     'sentry:origins',
-                    clean_newline_inputs(options['sentry:origins'])
+                    clean_newline_inputs(options['sentry:origins']),
                 )
             if 'sentry:resolve_age' in options:
-                project.update_option('sentry:resolve_age', int(options['sentry:resolve_age']))
+                project.update_option(
+                    'sentry:resolve_age',
+                    int(options['sentry:resolve_age']),
+                )
             if 'sentry:scrub_data' in options:
-                project.update_option('sentry:scrub_data', bool(options['sentry:scrub_data']))
+                project.update_option(
+                    'sentry:scrub_data',
+                    bool(options['sentry:scrub_data']),
+                )
             if 'sentry:scrub_defaults' in options:
-                project.update_option('sentry:scrub_defaults', bool(options['sentry:scrub_defaults']))
+                project.update_option(
+                    'sentry:scrub_defaults',
+                    bool(options['sentry:scrub_defaults']),
+                )
             if 'sentry:safe_fields' in options:
                 project.update_option(
                     'sentry:safe_fields',
-                    [s.strip().lower() for s in options['sentry:safe_fields']]
+                    [v.strip() for v in options['sentry:safe_fields']],
                 )
             if 'sentry:sensitive_fields' in options:
                 project.update_option(
                     'sentry:sensitive_fields',
-                    [s.strip().lower() for s in options['sentry:sensitive_fields']]
+                    [v.strip() for v in options['sentry:sensitive_fields']],
+                )
+            if 'sentry:scrub_ip_address' in options:
+                project.update_option(
+                    'sentry:scrub_ip_address',
+                    bool(options['sentry:scrub_ip_address']),
+                )
+            if 'mail:subject_prefix' in options:
+                project.update_option(
+                    'mail:subject_prefix',
+                    options['mail:subject_prefix'],
+                )
+            if 'sentry:default_environment' in options:
+                project.update_option(
+                    'sentry:default_environment',
+                    options['sentry:default_environment'],
                 )
             if 'sentry:csp_ignored_sources_defaults' in options:
-                project.update_option('sentry:csp_ignored_sources_defaults', bool(options['sentry:csp_ignored_sources_defaults']))
+                project.update_option(
+                    'sentry:csp_ignored_sources_defaults',
+                    bool(options['sentry:csp_ignored_sources_defaults']),
+                )
             if 'sentry:csp_ignored_sources' in options:
                 project.update_option(
                     'sentry:csp_ignored_sources',
-                    clean_newline_inputs(options['sentry:csp_ignored_sources']))
+                    clean_newline_inputs(options['sentry:csp_ignored_sources']),
+                )
+            if 'sentry:blacklisted_ips' in options:
+                project.update_option(
+                    'sentry:blacklisted_ips',
+                    clean_newline_inputs(options['sentry:blacklisted_ips']),
+                )
             if 'feedback:branding' in options:
-                project.update_option('feedback:branding', '1' if options['feedback:branding'] else '0')
+                project.update_option(
+                    'feedback:branding',
+                    '1' if options['feedback:branding'] else '0',
+                )
 
             self.create_audit_entry(
                 request=request,
@@ -285,11 +404,9 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
                 data=project.get_audit_log_data(),
             )
 
+        # TODO(dcramer): might be nice just to not return the entry here
         data = serialize(project, request.user)
-        data['options'] = {
-            'sentry:origins': '\n'.join(project.get_option('sentry:origins', ['*']) or []),
-            'sentry:resolve_age': int(project.get_option('sentry:resolve_age', 0)),
-        }
+        data['options'] = self._get_options(project)
         data.update({
             'digestsMinDelay': project.get_option(
                 'digests:mail:minimum_delay', digests.minimum_delay,
@@ -297,6 +414,7 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
             'digestsMaxDelay': project.get_option(
                 'digests:mail:maximum_delay', digests.maximum_delay,
             ),
+            'securityToken': project.get_security_token(),
         })
 
         return Response(data)

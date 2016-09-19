@@ -63,7 +63,6 @@ from sentry.web.frontend.project_quotas import ProjectQuotasView
 from sentry.web.frontend.project_release_tracking import \
     ProjectReleaseTrackingView
 from sentry.web.frontend.project_rule_edit import ProjectRuleEditView
-from sentry.web.frontend.project_settings import ProjectSettingsView
 from sentry.web.frontend.project_tags import ProjectTagsView
 from sentry.web.frontend.react_page import GenericReactPageView, ReactPageView
 from sentry.web.frontend.reactivate_account import ReactivateAccountView
@@ -358,9 +357,6 @@ urlpatterns += patterns(
         name='sentry-accept-invite'),
 
     # Settings - Projects
-    url(r'^(?P<organization_slug>[\w_-]+)/(?P<project_slug>[\w_-]+)/settings/$',
-        ProjectSettingsView.as_view(),
-        name='sentry-manage-project'),
     url(r'^(?P<organization_slug>[\w_-]+)/(?P<project_slug>[\w_-]+)/settings/issue-tracking/$',
         ProjectIssueTrackingView.as_view(),
         name='sentry-project-issue-tracking'),

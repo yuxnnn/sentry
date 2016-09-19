@@ -6,7 +6,6 @@ from django.core.urlresolvers import reverse
 from django.http import HttpResponseRedirect
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
-from uuid import uuid1
 
 from sentry import options
 from sentry.models import AuditLogEntryEvent, Project, Team
@@ -201,18 +200,12 @@ class ProjectSettingsView(ProjectView):
             if request.access.has_team_scope(t, self.required_scope)
         ]
 
-        # TODO(dcramer): this update should happen within a lock
-        security_token = project.get_option('sentry:token', None)
-        if security_token is None:
-            security_token = uuid1().hex
-            project.update_option('sentry:token', security_token)
-
         return EditProjectForm(
             request, organization, team_list, request.POST or None,
             instance=project,
             initial={
                 'origins': '\n'.join(project.get_option('sentry:origins', ['*'])),
-                'token': security_token,
+                'token': project.get_security_token(),
                 'resolve_age': int(project.get_option('sentry:resolve_age', 0)),
                 'scrub_data': bool(project.get_option('sentry:scrub_data', True)),
                 'scrub_defaults': bool(project.get_option('sentry:scrub_defaults', True)),

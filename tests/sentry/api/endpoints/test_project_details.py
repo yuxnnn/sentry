@@ -5,7 +5,10 @@ import six
 
 from django.core.urlresolvers import reverse
 
-from sentry.models import Project, ProjectBookmark, ProjectStatus, UserOption
+from sentry.models import (
+    OrganizationMember, OrganizationMemberTeam, Project, ProjectBookmark,
+    ProjectStatus, UserOption
+)
 from sentry.testutils import APITestCase
 
 
@@ -181,6 +184,65 @@ class ProjectUpdateTest(APITestCase):
             user=self.user,
             project=project,
         ).value == 0
+
+    def test_security_token(self):
+        project = self.project  # force creation
+        self.login_as(user=self.user)
+        url = reverse('sentry-api-0-project-details', kwargs={
+            'organization_slug': project.organization.slug,
+            'project_slug': project.slug,
+        })
+        resp = self.client.put(url, data={
+            'securityToken': 'fizzbuzz',
+        })
+        assert resp.status_code == 200, resp.content
+        assert project.get_security_token() == 'fizzbuzz'
+
+    def test_team(self):
+        project = self.project  # force creation
+        self.login_as(user=self.user)
+        url = reverse('sentry-api-0-project-details', kwargs={
+            'organization_slug': project.organization.slug,
+            'project_slug': project.slug,
+        })
+
+        team2 = self.create_team(
+            name='other team',
+            organization=project.organization,
+        )
+
+        OrganizationMemberTeam.objects.create(
+            organizationmember=OrganizationMember.objects.get(
+                user=self.user,
+                organization=project.organization,
+            ),
+            team=team2,
+        )
+
+        resp = self.client.put(url, data={
+            'team': team2.slug,
+        })
+        assert resp.status_code == 200, resp.content
+        project = Project.objects.get(id=project.id)
+        assert project.team == team2
+
+    def test_invalid_team(self):
+        project = self.project  # force creation
+        self.login_as(user=self.user)
+        url = reverse('sentry-api-0-project-details', kwargs={
+            'organization_slug': project.organization.slug,
+            'project_slug': project.slug,
+        })
+
+        team2 = self.create_team(
+            name='other team',
+            organization=self.create_organization(name='other org')
+        )
+
+        resp = self.client.put(url, data={
+            'team': team2.slug,
+        })
+        assert resp.status_code == 400, resp.content
 
 
 class ProjectDeleteTest(APITestCase):
