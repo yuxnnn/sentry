@@ -22,7 +22,7 @@ from sentry.coreapi import (
     APIError, APIForbidden, APIRateLimited, ClientApiHelper, CspApiHelper,
     LazyData
 )
-from sentry.models import Project, OrganizationOption
+from sentry.models import Project, OrganizationOption, Organization
 from sentry.signals import (
     event_accepted, event_dropped, event_filtered, event_received
 )
@@ -184,19 +184,23 @@ class APIView(BaseView):
         else:
             auth = self._parse_header(request, helper, project)
 
-            project_ = helper.project_from_auth(auth)
+            project_id = helper.project_id_from_auth(auth)
 
             # Legacy API was /api/store/ and the project ID was only available elsewhere
             if not project:
-                if not project_:
-                    raise APIError('Unable to identify project')
-                project = project_
+                project = Project.objects.get_from_cache(id=project_id)
                 helper.context.bind_project(project)
-            elif project_ != project:
+            elif project_id != project.id:
                 raise APIError('Two different projects were specified')
 
             helper.context.bind_auth(auth)
             Raven.tags_context(helper.context.get_tags_context())
+
+            # Explicitly bind Organization so we don't implicitly query it later
+            # this just allows us to comfortably assure that `project.organization` is safe.
+            # This also allows us to pull the object from cache, instead of being
+            # implicitly fetched from database.
+            project.organization = Organization.objects.get_from_cache(id=project.organization_id)
 
             if auth.version != '2.0':
                 if not auth.secret_key:
@@ -462,8 +466,8 @@ class CspReportView(StoreView):
         # `sentry_version` to be set in querystring
         auth = helper.auth_from_request(request)
 
-        project_ = helper.project_from_auth(auth)
-        if project_ != project:
+        project_id = helper.project_id_from_auth(auth)
+        if project_id != project.id:
             raise APIError('Two different projects were specified')
 
         helper.context.bind_auth(auth)

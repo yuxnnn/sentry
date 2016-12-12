@@ -300,6 +300,13 @@ def fetch_file(url, project=None, release=None, allow_scraping=True):
 
     Attempts to fetch from the cache.
     """
+    # If our url has been truncated, it'd be impossible to fetch
+    # so we check for this early and bail
+    if url[-3:] == '...':
+        raise CannotFetchSource({
+            'type': EventError.JS_MISSING_SOURCE,
+            'url': expose_url(url),
+        })
     if release:
         with metrics.timer('sourcemaps.release_file'):
             result = fetch_release_file(url, release)
@@ -496,7 +503,15 @@ def is_utf8(encoding):
 
 def fetch_sourcemap(url, project=None, release=None, allow_scraping=True):
     if is_data_uri(url):
-        body = base64.b64decode(url[BASE64_PREAMBLE_LENGTH:])
+        try:
+            body = base64.b64decode(
+                url[BASE64_PREAMBLE_LENGTH:] + (b'=' * (-(len(url) - BASE64_PREAMBLE_LENGTH) % 4))
+            )
+        except TypeError as e:
+            raise UnparseableSourcemap({
+                'url': '<base64>',
+                'reason': e.message,
+            })
     else:
         result = fetch_file(url, project=project, release=release,
                             allow_scraping=allow_scraping)
