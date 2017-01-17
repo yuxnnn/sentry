@@ -6,6 +6,7 @@ Version 8.13 (Unreleased)
 - start using ReleaseProject and Release.organization instead of Release.project
 - Project quotas are no longer available, and must now be configured via the organizational rate limits.
 - Quotas implementation now requires a tuple of maximum rate and interval window.
+- Added new internal processing interface that supports multiple processing steps per stacktrace (for instance JavaScript + native)
 
 Version 8.12
 ------------
